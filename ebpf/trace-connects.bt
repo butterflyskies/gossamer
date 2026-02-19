@@ -1,0 +1,37 @@
+#!/usr/bin/env bpftrace
+/*
+ * Trace all connect() syscalls with full sockaddr decode.
+ * Run with: sudo bpftrace trace-connects.bt
+ */
+
+tracepoint:syscalls:sys_enter_connect
+{
+    $sa = (struct sockaddr *)args.uservaddr;
+    $f = $sa->sa_family;
+
+    if ($f == 1) {  // AF_UNIX — sun_path starts at offset 2
+        $p = args.uservaddr + 2;
+        $len = args.addrlen > 2 ? args.addrlen - 2 : 0;
+        if ($len == 0) {
+            printf("%-12llu %-20s %-6d UNIX  (autobind)\n", elapsed, comm, pid);
+        } else if (*(int8 *)$p == 0) {
+            // Abstract socket — str() stops at first null after the name
+            printf("%-12llu %-20s %-6d UNIX  @%s\n", elapsed, comm, pid, str($p + 1));
+        } else {
+            // Filesystem socket — str() stops at null terminator
+            printf("%-12llu %-20s %-6d UNIX  %s\n", elapsed, comm, pid, str($p));
+        }
+    } else if ($f == 2) {  // AF_INET
+        $sin = (struct sockaddr_in *)args.uservaddr;
+        $port = ($sin->sin_port >> 8) | (($sin->sin_port & 0xff) << 8);
+        printf("%-12llu %-20s %-6d IPv4  %s:%d\n", elapsed, comm, pid,
+            ntop(2, $sin->sin_addr.s_addr), $port);
+    } else if ($f == 10) {  // AF_INET6
+        $sin6 = (struct sockaddr_in6 *)args.uservaddr;
+        $port = ($sin6->sin6_port >> 8) | (($sin6->sin6_port & 0xff) << 8);
+        printf("%-12llu %-20s %-6d IPv6  [%s]:%d\n", elapsed, comm, pid,
+            ntop(10, $sin6->sin6_addr.in6_u.u6_addr8), $port);
+    } else {
+        printf("%-12llu %-20s %-6d AF=%-3d\n", elapsed, comm, pid, $f);
+    }
+}
